@@ -4,11 +4,21 @@ export interface Version {
   message: string;
   content: string;
   hash: string;
-  author?: string;
+  filePath: string;
+  fileName: string;
+  changeType: "manual" | "auto" | "rename" | "restore";
+  previousFilePath?: string;
+  previousFileName?: string;
+  additions?: number;
+  deletions?: number;
+  wordCount?: number;
+  charCount?: number;
 }
 
 export interface FileHistory {
+  historyId?: string;
   filePath: string;
+  fileName?: string;
   versions: Version[];
   currentHash: string;
 }
@@ -20,4 +30,10 @@ export interface DiffLine {
   oldLine?: number;
   newLine?: number;
   content: string;
+}
+
+export interface WordStats {
+  words: number;
+  chars: number;
+  lines: number;
 }

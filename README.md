@@ -19,13 +19,16 @@ Oasisic Note Version Control 就是为这些时刻准备的。它不会把你的
 
 - 📝 为任意 Markdown 文件创建手动快照
 - 🔖 使用短 SHA-256 哈希作为版本 ID
-- 🕒 记录时间、提交信息、作者、内容和内容哈希
-- 📁 每个文件独立保存 JSON 历史，默认位于 `.versions`
+- 🕒 记录时间、提交信息、文件名、内容和内容哈希
+- 🧭 文件改名后历史不会丢，会额外记录“重命名”快照
+- 📁 每个文件通过稳定索引关联历史，默认存储在 `.versions`
 - 🧮 可配置每个文件最多保留多少个版本，默认 50
-- 🟢🔴 支持行级差异对比，清楚标记新增和删除
+- 🟢🔴 GitHub 风格差异对比，支持左右、行内、上下文件三种布局
 - ↩️ 可以恢复到任意历史版本
 - 🛟 恢复操作本身也会创建新快照，方便再次回退
-- ⚙️ 可选保存时自动创建快照
+- ⚙️ 可选保存时自动创建快照，并用简短摘要描述“修改内容 / 重命名”等变化
+- 🔢 显示笔记字数、行数和版本增删统计
+- 🪟 左侧 ribbon 按钮打开浮动历史窗口，命令面板仍可打开右侧栏
 - 🌓 自动适配 Obsidian 亮色 / 深色主题
 - 🌏 支持自动语言、English、简体中文
 
@@ -88,10 +91,11 @@ Settings -> Community plugins -> Oasisic Note Version Control
 ## 使用方式 📌
 
 1. 打开一篇 Markdown 笔记。
-2. 从命令面板运行“打开版本控制面板”，或点击左侧 ribbon 图标。
+2. 点击左侧 ribbon 图标打开浮动历史窗口，或者从命令面板运行“打开版本控制面板”打开右侧栏。
 3. 点击“创建快照”，输入这次修改的提交信息。
-4. 在时间线中选择一个版本，查看详情和差异。
-5. 如果需要回到旧版本，点击“恢复”并确认。
+4. 在紧凑时间线中选择一个版本，查看文件名、字数、哈希、增删统计和差异。
+5. 在差异区域选择左右对比、行内对比或上下文件对比。
+6. 如果需要回到旧版本，点击“恢复”并确认。
 
 小建议：如果你喜欢“重要节点手动保存”的工作流，建议关闭自动快照；如果你喜欢“每次保存都留痕”，可以打开自动快照。
 
@@ -103,7 +107,7 @@ Settings -> Community plugins -> Oasisic Note Version Control
 | Version storage folder | 版本 JSON 文件存储位置，默认 `.versions` |
 | Auto snapshot on save | Markdown 文件变化时自动创建快照 |
 | Maximum versions per file | 每个文件最多保留多少个版本，默认 50 |
-| Author | 写入每个快照的作者名称 |
+| Diff layout | 默认差异布局：左右对比、行内对比、上下文件 |
 
 ## 数据存储格式 💾
 
@@ -119,14 +123,32 @@ Settings -> Community plugins -> Oasisic Note Version Control
       "message": "Update section on features",
       "content": "file content...",
       "hash": "sha256...",
-      "author": "User"
+      "filePath": "path/to/file.md",
+      "fileName": "file.md",
+      "changeType": "auto",
+      "additions": 8,
+      "deletions": 2,
+      "wordCount": 120,
+      "charCount": 420
     }
   ],
   "currentHash": "sha256..."
 }
 ```
 
-插件会在历史文件名中加入笔记路径的短哈希，避免不同文件夹下同名笔记发生冲突。
+插件会维护 `.versions/index.json`，把笔记路径映射到稳定的历史文件。笔记改名时，旧路径会迁移到新路径，历史不会因为文件名变化而丢失。
+
+重命名会产生一条独立快照，例如：
+
+```text
+重命名：Old name.md -> New name.md
+```
+
+内容修改会产生更短的自动摘要，例如：
+
+```text
+修改内容：新增 8 行，删除 2 行 · Project Plan
+```
 
 ## 发布到 GitHub Release 🏷️
 
@@ -257,9 +279,19 @@ styles.css
 
 1. 点击文件右上角的编辑按钮。
 2. GitHub 会自动 fork 官方仓库到你的账号下。
-3. 滚动到 JSON 数组末尾。
-4. 在最后一个插件条目后面加逗号。
-5. 添加你的插件信息。
+3. 滚动到 JSON 数组最末尾。
+4. 找到当前最后一个插件条目。
+5. 在当前最后一个插件条目的 `}` 后面加一个逗号。
+6. 把你的插件信息放在它后面，作为新的最后一项。
+7. 确认你的条目后面没有多余逗号，因为 JSON 数组最后一项后面不能有逗号。
+
+非常重要：新增条目必须放在整个 `community-plugins.json` 的最后。如果 bot 提示：
+
+```text
+The last plugin in the list is: santiyounger/wpm-reading-time.
+```
+
+那就说明官方当前列表最后一项是 `santiyounger/wpm-reading-time`，你的条目应该放在它后面，而不是插在中间或按字母顺序插入。
 
 推荐条目：
 
@@ -296,8 +328,44 @@ styles.css
    Add plugin: Oasisic Note Version Control
    ```
 
-7. 按模板填写说明，并把已完成项目勾选成 `[x]`。
-8. 点击 `Create pull request`。
+7. PR 描述必须使用官方 `Community Plugin` 模板。
+8. 按模板填写说明，并把已完成项目勾选成 `[x]`。
+9. 点击 `Create pull request`。
+
+可以直接复制下面这份模板，再按你的实际测试情况调整：
+
+```markdown
+# I am submitting a new Community Plugin
+
+- [x] I attest that I have done my best to deliver a high-quality plugin, am proud of the code I have written, and would recommend it to others. I commit to maintaining the plugin and being responsive to bug reports. If I am no longer able to maintain it, I will make reasonable efforts to find a successor maintainer or withdraw the plugin from the directory.
+
+## Repo URL
+
+Link to my plugin:
+https://github.com/Hawaiine/oasisic-note-version-control
+
+## Release Checklist
+- [x] I have tested the plugin on
+  - [x]  Windows
+  - [ ]  macOS
+  - [ ]  Linux
+  - [ ]  Android _(if applicable)_
+  - [ ]  iOS _(if applicable)_
+- [x] My GitHub release contains all required files (as individual files, not just in the source.zip / source.tar.gz)
+  - [x] `main.js`
+  - [x] `manifest.json`
+  - [x] `styles.css` _(optional)_
+- [x] GitHub release name matches the exact version number specified in my manifest.json (_**Note:** Use the exact version number, don't include a prefix `v`_)
+- [x] The `id` in my `manifest.json` matches the `id` in the `community-plugins.json` file.
+- [x] My README.md describes the plugin's purpose and provides clear usage instructions.
+- [x] I have read the developer policies at https://docs.obsidian.md/Developer+policies, and have assessed my plugin's adherence to these policies.
+- [x] I have read the tips in https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines and have self-reviewed my plugin to avoid these common pitfalls.
+- [x] I have added a license in the LICENSE file.
+- [x] My project respects and is compatible with the original license of any code from other plugins that I'm using.
+      I have given proper attribution to these other projects in my `README.md`.
+```
+
+如果你还没有测试 macOS / Linux / 移动端，不要随便勾选。只勾选你实际测试过的平台。已经确认 Release 附件存在、README 清楚、LICENSE 存在的项目可以勾选。
 
 ### 5. 等待自动校验和人工审核
 
@@ -337,6 +405,45 @@ styles.css
 6. 把已经完成的检查项从 `[ ]` 改成 `[x]`。
 7. 点击 `Update comment` 保存。
 8. 回到 PR 页面，确认描述里能看到完整模板，而不是只有一句简单说明。
+
+可以用上面“创建 PR”一节里的模板。注意不要只写一句“Add plugin”，bot 会认为没有遵循模板。
+
+### 新增条目不在列表末尾
+
+报错类似：
+
+```text
+❌ The newly added entry is not at the end, or you are submitting on someone else's behalf. The last plugin in the list is: santiyounger/wpm-reading-time.
+```
+
+处理方式：
+
+1. 打开你的 PR。
+2. 点击 `Files changed`。
+3. 找到 `community-plugins.json`。
+4. 确认你的插件条目是不是整个 JSON 数组的最后一项。
+5. 如果不是，点击右上角 `...`，选择 `Edit file`。
+6. 剪切你的插件条目。
+7. 滚动到文件最底部。
+8. 找到 bot 提到的当前最后一个插件，例如：
+
+   ```json
+   {
+     "id": "wpm-reading-time",
+     "name": "...",
+     "author": "...",
+     "description": "...",
+     "repo": "santiyounger/wpm-reading-time"
+   }
+   ```
+
+9. 在这个最后条目的 `}` 后面加逗号。
+10. 把你的插件条目粘贴到它后面。
+11. 确认你的插件条目是数组最后一个元素，后面只剩下结束的 `]`。
+12. 确认你的插件条目最后没有逗号。
+13. 提交修改到同一个 PR 分支。
+
+如果你是用 GitHub 组织账号提交，还要确认你是该组织的 public member。否则 bot 可能认为你是在替别人提交插件。你的情况如果仓库是 `Hawaiine/oasisic-note-version-control`，最好用 `Hawaiine` 这个账号提交 PR。
 
 ### Release 缺少 `main.js`
 
@@ -441,21 +548,49 @@ Thanks for the check. I updated the PR template, added LICENSE, and uploaded mai
 
 流程：
 
-1. 更新 `manifest.json` 里的 `version`。
-2. 必要时更新 `versions.json`。
-3. 创建同版本号的 tag，例如 `0.1.1`。
-4. 让 GitHub Actions 自动构建并上传 Release 附件。
+1. 修改代码和 README。
+2. 更新 `manifest.json` 里的 `version`，例如从 `0.1.0` 改成 `0.1.1`。
+3. 如果最低 Obsidian 版本没变，`versions.json` 可以不动；如果变了，就补上新版本映射：
+
+   ```json
+   {
+     "0.1.0": "0.15.0",
+     "0.1.1": "1.5.0"
+   }
+   ```
+
+4. 把改动 push 到 GitHub。
+5. 创建同版本号 tag，例如：
+
+   ```bash
+   git tag 0.1.1
+   git push origin 0.1.1
+   ```
+
+6. 等 GitHub Actions 自动构建并生成 Release。
+7. 打开 `Releases -> 0.1.1 -> Assets`，确认有：
+
+   ```text
+   manifest.json
+   main.js
+   styles.css
+   ```
+
+8. 如果发现问题，修代码后删除错误的 tag / Release，再重新创建同版本 tag，或者把版本号递增到下一个补丁版本。
 
 Obsidian 会从你的 GitHub Release 读取新版本，不需要再次向 `obsidian-releases` 提 PR。
 
+一个简单原则：`manifest.json` 的 `version`、Git tag、GitHub Release 名称三者保持完全一致，不加 `v` 前缀。
+
 ## English Quick Start 🌐
 
-Oasisic Note Version Control creates Git-style snapshots for Obsidian Markdown files.
+Oasisic Note Version Control creates Git-style snapshots for Obsidian Markdown files. It keeps history after note renames, tracks content changes separately from file-name changes, and offers GitHub-style diff layouts.
 
 - Open a Markdown note.
-- Run `Open version control panel`.
+- Click the ribbon icon for a floating history window, or run `Open version control panel` for the right sidebar.
 - Click `Snapshot` to save a version.
 - Select a timeline item to inspect metadata, diff, and preview.
+- Switch between side-by-side, inline, and top/bottom diff layouts.
 - Click `Revert` to restore an older version after confirmation.
 
 The plugin supports `Auto`, `English`, and `Simplified Chinese` as interface language options.

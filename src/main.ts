@@ -13,27 +13,32 @@ import {
   moment,
   normalizePath
 } from "obsidian";
-import type { DiffLine, FileHistory, Version } from "./types";
+import type { DiffLine, FileHistory, Version, WordStats } from "./types";
 
 const PLUGIN_NAME = "Oasisic Note Version Control";
 const VIEW_TYPE_VERSION_CONTROL = "oasisic-note-version-control-view";
 
 type LanguageSetting = "auto" | "en" | "zh-CN";
+type DiffViewMode = "split" | "inline" | "stacked";
 
 interface VersionControlSettings {
   versionDir: string;
   autoCommitOnSave: boolean;
   maxVersions: number;
-  author: string;
   language: LanguageSetting;
+  diffViewMode: DiffViewMode;
+}
+
+interface FileHistoryIndex {
+  files: Record<string, string>;
 }
 
 const DEFAULT_SETTINGS: VersionControlSettings = {
   versionDir: ".versions",
   autoCommitOnSave: false,
   maxVersions: 50,
-  author: "User",
-  language: "auto"
+  language: "auto",
+  diffViewMode: "split"
 };
 
 const TRANSLATIONS = {
@@ -42,6 +47,8 @@ const TRANSLATIONS = {
     noChanges: "No changes to commit.",
     manualSnapshot: "Manual snapshot",
     autoSnapshot: "Auto snapshot: {{name}}",
+    renameSnapshot: "Rename: {{oldName}} -> {{newName}}",
+    contentSummary: "Edit: {{additions}} additions, {{deletions}} deletions",
     loadHistoryFailed: "Could not load version history for {{name}}.",
     versionNotFound: "Version not found.",
     beforeRevert: "Before reverting to {{id}}",
@@ -67,9 +74,22 @@ const TRANSLATIONS = {
     selectSnapshot: "Select a snapshot to inspect its metadata and diff.",
     message: "Message",
     created: "Created",
-    author: "Author",
     unknown: "Unknown",
     hash: "Hash",
+    fileName: "File name",
+    previousName: "Previous name",
+    wordStats: "Words",
+    lineStats: "Lines",
+    changeKind: "Change",
+    changedName: "Renamed note",
+    changedContent: "Edited content",
+    changedRestore: "Restored version",
+    diffMode: "Diff layout",
+    diffModeSplit: "Side by side",
+    diffModeInline: "Inline",
+    diffModeStacked: "Top / bottom",
+    before: "Before",
+    after: "After",
     diffTitle: "Diff against current file",
     showingLines: "Showing first {{shown}} of {{total}} lines",
     noDifferences: "No differences.",
@@ -90,7 +110,8 @@ const TRANSLATIONS = {
     autoOnSaveDesc: "Create a version automatically when a Markdown file changes.",
     maxVersions: "Maximum versions per file",
     maxVersionsDesc: "Old snapshots are trimmed after this limit.",
-    authorDesc: "Name stored with each snapshot.",
+    compactTimeline: "Compact timeline",
+    modalHint: "Ribbon button opens a floating history window.",
     language: "Language",
     languageDesc: "Choose the plugin interface language.",
     languageAuto: "Auto",
@@ -102,6 +123,8 @@ const TRANSLATIONS = {
     noChanges: "没有可提交的变更。",
     manualSnapshot: "手动快照",
     autoSnapshot: "自动快照：{{name}}",
+    renameSnapshot: "重命名：{{oldName}} -> {{newName}}",
+    contentSummary: "修改内容：新增 {{additions}} 行，删除 {{deletions}} 行",
     loadHistoryFailed: "无法加载 {{name}} 的版本历史。",
     versionNotFound: "未找到该版本。",
     beforeRevert: "恢复到 {{id}} 前的快照",
@@ -127,9 +150,22 @@ const TRANSLATIONS = {
     selectSnapshot: "选择一个快照以查看元数据和差异。",
     message: "提交信息",
     created: "创建时间",
-    author: "作者",
     unknown: "未知",
     hash: "哈希",
+    fileName: "文件名",
+    previousName: "原文件名",
+    wordStats: "字数",
+    lineStats: "行数",
+    changeKind: "类型",
+    changedName: "重命名笔记",
+    changedContent: "修改内容",
+    changedRestore: "恢复版本",
+    diffMode: "差异布局",
+    diffModeSplit: "左右对比",
+    diffModeInline: "上下行内",
+    diffModeStacked: "上下文件",
+    before: "修改前",
+    after: "修改后",
     diffTitle: "与当前文件对比",
     showingLines: "显示前 {{shown}} 行，共 {{total}} 行",
     noDifferences: "没有差异。",
@@ -150,7 +186,8 @@ const TRANSLATIONS = {
     autoOnSaveDesc: "Markdown 文件发生变化时自动创建版本。",
     maxVersions: "每个文件的最大版本数",
     maxVersionsDesc: "超过此数量后会清理较旧的快照。",
-    authorDesc: "每个快照中记录的作者名称。",
+    compactTimeline: "紧凑时间线",
+    modalHint: "侧边栏按钮会打开浮动历史窗口。",
     language: "语言",
     languageDesc: "选择插件界面语言。",
     languageAuto: "自动",
@@ -201,6 +238,8 @@ export class VersionController {
     const content = await this.app.vault.read(file);
     const contentHash = await this.hash(content);
     const history = await this.loadHistory(file);
+    const diffStats = this.getDiffStats(history.versions[0]?.content ?? "", content);
+    const wordStats = this.getWordStats(content);
 
     if (history.currentHash === contentHash && history.versions.length > 0) {
       new Notice(translate(this.settings, "noChanges"));
@@ -213,10 +252,17 @@ export class VersionController {
       message: message.trim() || translate(this.settings, "manualSnapshot"),
       content,
       hash: contentHash,
-      author: this.settings.author.trim() || undefined
+      filePath: file.path,
+      fileName: file.name,
+      changeType: "manual",
+      additions: diffStats.additions,
+      deletions: diffStats.deletions,
+      wordCount: wordStats.words,
+      charCount: wordStats.chars
     };
 
     history.filePath = file.path;
+    history.fileName = file.name;
     history.currentHash = contentHash;
     history.versions = [version, ...history.versions].slice(0, this.settings.maxVersions);
 
@@ -237,6 +283,9 @@ export class VersionController {
     const fileContent = content ?? (await this.app.vault.read(file));
     const contentHash = await this.hash(fileContent);
     const history = await this.loadHistory(file);
+    const previousContent = history.versions[0]?.content ?? "";
+    const diffStats = this.getDiffStats(previousContent, fileContent);
+    const wordStats = this.getWordStats(fileContent);
 
     if (history.currentHash === contentHash) {
       return null;
@@ -245,13 +294,20 @@ export class VersionController {
     const version: Version = {
       id: (await this.hash(`${file.path}:${contentHash}:${Date.now()}`)).slice(0, 8),
       timestamp: Date.now(),
-      message: translate(this.settings, "autoSnapshot", { name: file.basename }),
+      message: this.summarizeAutoCommit(file, previousContent, fileContent, diffStats),
       content: fileContent,
       hash: contentHash,
-      author: this.settings.author.trim() || undefined
+      filePath: file.path,
+      fileName: file.name,
+      changeType: "auto",
+      additions: diffStats.additions,
+      deletions: diffStats.deletions,
+      wordCount: wordStats.words,
+      charCount: wordStats.chars
     };
 
     history.filePath = file.path;
+    history.fileName = file.name;
     history.currentHash = contentHash;
     history.versions = [version, ...history.versions].slice(0, this.settings.maxVersions);
     await this.saveHistory(file, history);
@@ -270,7 +326,9 @@ export class VersionController {
 
     const path = await this.getHistoryPath(file);
     let history: FileHistory = {
+      historyId: await this.getHistoryId(file),
       filePath: file.path,
+      fileName: file.name,
       versions: [],
       currentHash: ""
     };
@@ -316,16 +374,25 @@ export class VersionController {
 
     const updatedHistory = await this.loadHistory(file);
     const restoredHash = await this.hash(target.content);
+    const diffStats = this.getDiffStats(currentContent, target.content);
+    const wordStats = this.getWordStats(target.content);
     const restoreVersion: Version = {
       id: (await this.hash(`${file.path}:${restoredHash}:restore:${Date.now()}`)).slice(0, 8),
       timestamp: Date.now(),
       message: translate(this.settings, "revertMessage", { id: target.id, message: target.message }),
       content: target.content,
       hash: restoredHash,
-      author: this.settings.author.trim() || undefined
+      filePath: file.path,
+      fileName: file.name,
+      changeType: "restore",
+      additions: diffStats.additions,
+      deletions: diffStats.deletions,
+      wordCount: wordStats.words,
+      charCount: wordStats.chars
     };
 
     updatedHistory.filePath = file.path;
+    updatedHistory.fileName = file.name;
     updatedHistory.currentHash = restoredHash;
     updatedHistory.versions = [restoreVersion, ...updatedHistory.versions].slice(0, this.settings.maxVersions);
     await this.saveHistory(file, updatedHistory);
@@ -385,12 +452,69 @@ export class VersionController {
     this.cache.delete(path);
   }
 
+  async handleRename(file: TAbstractFile, oldPath: string): Promise<Version | null> {
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      return null;
+    }
+
+    const index = await this.loadIndex();
+    let oldHistoryId = index.files[oldPath];
+    if (!oldHistoryId) {
+      const legacyId = await this.createHistoryIdFromPath(oldPath);
+      if (await this.app.vault.adapter.exists(normalizePath(`${this.cleanVersionDir()}/${legacyId}.history.json`))) {
+        oldHistoryId = legacyId;
+      }
+    }
+    if (oldHistoryId) {
+      index.files[file.path] = oldHistoryId;
+      delete index.files[oldPath];
+      await this.saveIndex(index);
+      this.cache.delete(oldPath);
+    }
+
+    if (file.path.startsWith(`${this.cleanVersionDir()}/`)) {
+      return null;
+    }
+
+    const content = await this.app.vault.read(file);
+    const contentHash = await this.hash(content);
+    const history = await this.loadHistory(file);
+    const wordStats = this.getWordStats(content);
+    const oldName = oldPath.split("/").pop() ?? oldPath;
+
+    const version: Version = {
+      id: (await this.hash(`${oldPath}:${file.path}:rename:${Date.now()}`)).slice(0, 8),
+      timestamp: Date.now(),
+      message: translate(this.settings, "renameSnapshot", { oldName, newName: file.name }),
+      content,
+      hash: contentHash,
+      filePath: file.path,
+      fileName: file.name,
+      previousFilePath: oldPath,
+      previousFileName: oldName,
+      changeType: "rename",
+      additions: 0,
+      deletions: 0,
+      wordCount: wordStats.words,
+      charCount: wordStats.chars
+    };
+
+    history.filePath = file.path;
+    history.fileName = file.name;
+    history.currentHash = contentHash;
+    history.versions = [version, ...history.versions].slice(0, this.settings.maxVersions);
+    await this.saveHistory(file, history);
+    this.cache.set(file.path, history);
+    return version;
+  }
+
   isVersionableMarkdown(file: TAbstractFile | null): file is TFile {
     return file instanceof TFile && file.extension === "md" && !file.path.startsWith(`${this.cleanVersionDir()}/`);
   }
 
   private async saveHistory(file: TFile, history: FileHistory): Promise<void> {
     await this.ensureVersionDir();
+    history.historyId = await this.getHistoryId(file);
     const path = await this.getHistoryPath(file);
     await this.app.vault.adapter.write(path, JSON.stringify(history, null, 2));
   }
@@ -409,9 +533,55 @@ export class VersionController {
   }
 
   private async getHistoryPath(file: TFile): Promise<string> {
-    const safeName = file.basename.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "note";
-    const pathHash = (await this.hash(file.path)).slice(0, 8);
-    return normalizePath(`${this.cleanVersionDir()}/${safeName}-${pathHash}.history.json`);
+    const historyId = await this.getHistoryId(file);
+    return normalizePath(`${this.cleanVersionDir()}/${historyId}.history.json`);
+  }
+
+  private async getHistoryId(file: TFile): Promise<string> {
+    const index = await this.loadIndex();
+    const existing = index.files[file.path];
+    if (existing) {
+      return existing;
+    }
+
+    const historyId = await this.createHistoryIdFromPath(file.path);
+    index.files[file.path] = historyId;
+    await this.saveIndex(index);
+    return historyId;
+  }
+
+  private async createHistoryIdFromPath(path: string): Promise<string> {
+    const fileName = path.split("/").pop() ?? "note";
+    const basename = fileName.replace(/\.md$/i, "");
+    const safeName = basename.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "note";
+    const pathHash = (await this.hash(path)).slice(0, 8);
+    return `${safeName}-${pathHash}`;
+  }
+
+  private async loadIndex(): Promise<FileHistoryIndex> {
+    const path = this.getIndexPath();
+    try {
+      if (await this.app.vault.adapter.exists(path)) {
+        const raw = await this.app.vault.adapter.read(path);
+        const parsed = JSON.parse(raw) as Partial<FileHistoryIndex>;
+        return {
+          files: parsed.files && typeof parsed.files === "object" ? { ...parsed.files } : {}
+        };
+      }
+    } catch (error) {
+      console.error("Failed to load version history index", error);
+    }
+
+    return { files: {} };
+  }
+
+  private async saveIndex(index: FileHistoryIndex): Promise<void> {
+    await this.ensureVersionDir();
+    await this.app.vault.adapter.write(this.getIndexPath(), JSON.stringify(index, null, 2));
+  }
+
+  private getIndexPath(): string {
+    return normalizePath(`${this.cleanVersionDir()}/index.json`);
   }
 
   private cleanVersionDir(): string {
@@ -426,14 +596,62 @@ export class VersionController {
             const item = version as Partial<Version>;
             return Boolean(item.id && typeof item.content === "string" && typeof item.timestamp === "number");
           })
+          .map((version) => ({
+            ...version,
+            filePath: version.filePath ?? fallbackPath,
+            fileName: version.fileName ?? fallbackPath.split("/").pop() ?? fallbackPath,
+            changeType: version.changeType ?? "manual",
+            wordCount: version.wordCount ?? this.getWordStats(version.content).words,
+            charCount: version.charCount ?? this.getWordStats(version.content).chars
+          }))
           .sort((a, b) => b.timestamp - a.timestamp)
       : [];
 
     return {
+      historyId: typeof candidate.historyId === "string" ? candidate.historyId : undefined,
       filePath: typeof candidate.filePath === "string" ? candidate.filePath : fallbackPath,
+      fileName: typeof candidate.fileName === "string" ? candidate.fileName : fallbackPath.split("/").pop() ?? fallbackPath,
       versions,
       currentHash: typeof candidate.currentHash === "string" ? candidate.currentHash : versions[0]?.hash ?? ""
     };
+  }
+
+  getWordStats(content: string): WordStats {
+    const trimmed = content.trim();
+    const cjkMatches = content.match(/[\u4e00-\u9fff]/g) ?? [];
+    const latinMatches = content.match(/[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*/g) ?? [];
+    return {
+      words: cjkMatches.length + latinMatches.length,
+      chars: content.replace(/\s/g, "").length,
+      lines: content.length === 0 ? 0 : content.split(/\r?\n/).length
+    };
+  }
+
+  private getDiffStats(before: string, after: string): { additions: number; deletions: number } {
+    const diff = this.getVersionDiff(before, after);
+    return {
+      additions: diff.filter((line) => line.type === "added").length,
+      deletions: diff.filter((line) => line.type === "removed").length
+    };
+  }
+
+  private summarizeAutoCommit(
+    file: TFile,
+    before: string,
+    after: string,
+    diffStats: { additions: number; deletions: number }
+  ): string {
+    const beforeTitle = this.getFirstHeading(before);
+    const afterTitle = this.getFirstHeading(after);
+    if (beforeTitle !== afterTitle && afterTitle) {
+      return `${translate(this.settings, "contentSummary", diffStats)} · ${afterTitle}`;
+    }
+    return `${translate(this.settings, "contentSummary", diffStats)} · ${file.basename}`;
+  }
+
+  private getFirstHeading(content: string): string {
+    const heading = content.split(/\r?\n/).find((line) => /^#{1,3}\s+\S/.test(line));
+    return heading?.replace(/^#{1,3}\s+/, "").trim().slice(0, 32) ?? "";
   }
 
   private buildLcsTable(oldLines: string[], newLines: string[]): number[][] {
@@ -636,9 +854,8 @@ export class VersionControlView extends ItemView {
 
       const meta = body.createDiv("gsvc-version-meta");
       meta.createSpan({ text: this.formatDate(version.timestamp) });
-      if (version.author) {
-        meta.createSpan({ text: version.author });
-      }
+      meta.createSpan({ text: `${version.additions ?? 0}+ / ${version.deletions ?? 0}-` });
+      meta.createSpan({ text: version.fileName });
 
       const actions = body.createDiv("gsvc-version-actions");
       const viewButton = actions.createEl("button", { text: this.plugin.t("view") });
@@ -676,7 +893,11 @@ export class VersionControlView extends ItemView {
     const meta = details.createDiv("gsvc-meta-grid");
     this.renderMeta(meta, this.plugin.t("message"), this.selectedVersion.message);
     this.renderMeta(meta, this.plugin.t("created"), this.formatDate(this.selectedVersion.timestamp));
-    this.renderMeta(meta, this.plugin.t("author"), this.selectedVersion.author || this.plugin.t("unknown"));
+    this.renderMeta(meta, this.plugin.t("fileName"), this.selectedVersion.fileName);
+    if (this.selectedVersion.previousFileName) {
+      this.renderMeta(meta, this.plugin.t("previousName"), this.selectedVersion.previousFileName);
+    }
+    this.renderMeta(meta, this.plugin.t("wordStats"), String(this.selectedVersion.wordCount ?? this.plugin.controller.getWordStats(this.selectedVersion.content).words));
     this.renderMeta(meta, this.plugin.t("hash"), this.selectedVersion.hash.slice(0, 16));
 
     const currentContent = await this.app.vault.read(this.currentFile);
@@ -704,29 +925,80 @@ export class VersionControlView extends ItemView {
     const block = parent.createDiv("gsvc-section");
     const title = block.createDiv("gsvc-section-title");
     title.createEl("span", { text: this.plugin.t("diffTitle") });
+    const modeSwitch = title.createDiv("gsvc-diff-modes");
+    (["split", "inline", "stacked"] as DiffViewMode[]).forEach((mode) => {
+      const button = modeSwitch.createEl("button", {
+        text: this.plugin.t(mode === "split" ? "diffModeSplit" : mode === "inline" ? "diffModeInline" : "diffModeStacked"),
+        cls: this.plugin.settings.diffViewMode === mode ? "is-active" : ""
+      });
+      button.addEventListener("click", async () => {
+        this.plugin.settings.diffViewMode = mode;
+        await this.plugin.saveSettings();
+        await this.render();
+      });
+    });
     if (diff.length > 50) {
       title.createEl("small", { text: this.plugin.t("showingLines", { shown: 50, total: diff.length }) });
     }
 
-    const diffEl = block.createDiv("gsvc-diff");
+    const diffEl = block.createDiv(`gsvc-diff is-${this.plugin.settings.diffViewMode}`);
     const visibleLines = diff.slice(0, 50);
     if (visibleLines.length === 0) {
       diffEl.createDiv("gsvc-diff-empty").setText(this.plugin.t("noDifferences"));
       return;
     }
 
+    if (this.plugin.settings.diffViewMode === "split") {
+      this.renderSplitDiff(diffEl, visibleLines);
+      return;
+    }
+
+    if (this.plugin.settings.diffViewMode === "stacked") {
+      const before = diffEl.createDiv("gsvc-stacked-block");
+      before.createEl("strong", { text: this.plugin.t("before") });
+      visibleLines.filter((line) => line.type !== "added").forEach((line) => this.renderDiffRow(before, line));
+      const after = diffEl.createDiv("gsvc-stacked-block");
+      after.createEl("strong", { text: this.plugin.t("after") });
+      visibleLines.filter((line) => line.type !== "removed").forEach((line) => this.renderDiffRow(after, line));
+      return;
+    }
+
     visibleLines.forEach((line) => {
-      const row = diffEl.createDiv(`gsvc-diff-line is-${line.type}`);
-      row.createEl("span", {
-        cls: "gsvc-line-no",
-        text: `${line.oldLine ?? ""}${line.oldLine && line.newLine ? " " : ""}${line.newLine ?? ""}`
-      });
-      row.createEl("span", {
-        cls: "gsvc-line-marker",
-        text: line.type === "added" ? "+" : line.type === "removed" ? "-" : " "
-      });
-      row.createEl("code", { text: line.content || " " });
+      this.renderDiffRow(diffEl, line);
     });
+  }
+
+  private renderSplitDiff(parent: HTMLElement, lines: DiffLine[]): void {
+    const grid = parent.createDiv("gsvc-split-diff");
+    grid.createEl("strong", { text: this.plugin.t("before") });
+    grid.createEl("strong", { text: this.plugin.t("after") });
+    lines.forEach((line) => {
+      const before = grid.createDiv(`gsvc-diff-line is-${line.type === "added" ? "empty" : line.type}`);
+      const after = grid.createDiv(`gsvc-diff-line is-${line.type === "removed" ? "empty" : line.type}`);
+      if (line.type !== "added") {
+        this.renderDiffRowContent(before, line, "-");
+      }
+      if (line.type !== "removed") {
+        this.renderDiffRowContent(after, line, "+");
+      }
+    });
+  }
+
+  private renderDiffRow(parent: HTMLElement, line: DiffLine): void {
+    const row = parent.createDiv(`gsvc-diff-line is-${line.type}`);
+    this.renderDiffRowContent(row, line, line.type === "added" ? "+" : line.type === "removed" ? "-" : " ");
+  }
+
+  private renderDiffRowContent(row: HTMLElement, line: DiffLine, marker: string): void {
+    row.createEl("span", {
+      cls: "gsvc-line-no",
+      text: `${line.oldLine ?? ""}${line.oldLine && line.newLine ? " " : ""}${line.newLine ?? ""}`
+    });
+    row.createEl("span", {
+      cls: "gsvc-line-marker",
+      text: line.type === "context" ? " " : marker
+    });
+    row.createEl("code", { text: line.content || " " });
   }
 
   private renderPreview(parent: HTMLElement, content: string): void {
@@ -765,6 +1037,142 @@ export class VersionControlView extends ItemView {
   }
 }
 
+class VersionControlModal extends Modal {
+  private history: FileHistory | null = null;
+  private selectedVersion: Version | null = null;
+
+  constructor(
+    app: App,
+    private plugin: VersionControlPlugin,
+    private file: TFile
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.modalEl.addClass("gsvc-floating-modal");
+    void this.refresh();
+  }
+
+  private async refresh(): Promise<void> {
+    this.plugin.controller.clearCacheFor(this.file.path);
+    this.history = await this.plugin.controller.loadHistory(this.file);
+    this.selectedVersion = this.selectedVersion
+      ? this.history.versions.find((version) => version.id === this.selectedVersion?.id) ?? this.history.versions[0] ?? null
+      : this.history.versions[0] ?? null;
+    await this.render();
+  }
+
+  private async render(): Promise<void> {
+    this.contentEl.empty();
+    const shell = this.contentEl.createDiv("gsvc-shell gsvc-modal-shell");
+    const header = shell.createDiv("gsvc-header");
+    const title = header.createDiv("gsvc-title-wrap");
+    title.createEl("div", { cls: "gsvc-eyebrow", text: this.plugin.t("currentNote") });
+    title.createEl("h2", { text: this.file.basename });
+    title.createEl("div", { cls: "gsvc-path", text: this.file.path });
+
+    const actions = header.createDiv("gsvc-header-actions");
+    const currentStats = this.plugin.controller.getWordStats(await this.app.vault.read(this.file));
+    actions.createEl("span", { cls: "gsvc-counter", text: `${this.plugin.t("wordStats")} ${currentStats.words}` });
+    const snapshot = actions.createEl("button", { cls: "gsvc-primary", text: this.plugin.t("snapshot") });
+    snapshot.addEventListener("click", async () => {
+      const message = window.prompt(this.plugin.t("commitMessage"), this.plugin.t("manualSnapshot"));
+      if (message === null) {
+        return;
+      }
+      await this.plugin.controller.commit(this.file, message);
+      await this.refresh();
+    });
+
+    const split = shell.createDiv("gsvc-split");
+    this.renderTimeline(split);
+    await this.renderDetails(split);
+  }
+
+  private renderTimeline(parent: HTMLElement): void {
+    const timeline = parent.createDiv("gsvc-timeline");
+    const heading = timeline.createDiv("gsvc-panel-heading");
+    heading.createEl("span", { text: this.plugin.t("timeline") });
+    heading.createEl("small", { text: this.plugin.t("newestFirst") });
+    const list = timeline.createDiv("gsvc-version-list");
+
+    if (!this.history?.versions.length) {
+      list.createDiv("gsvc-blank-list").setText(this.plugin.t("noSnapshots"));
+      return;
+    }
+
+    this.history.versions.forEach((version) => {
+      const item = list.createDiv({
+        cls: `gsvc-version-item ${this.selectedVersion?.id === version.id ? "is-selected" : ""}`
+      });
+      item.createDiv("gsvc-rail").createDiv(`gsvc-dot ${version.changeType === "rename" ? "is-rename" : ""}`);
+      const body = item.createDiv("gsvc-version-body");
+      const top = body.createDiv("gsvc-version-top");
+      top.createEl("strong", { text: version.message });
+      top.createEl("code", { text: version.id });
+      const meta = body.createDiv("gsvc-version-meta");
+      meta.createSpan({ text: this.formatDate(version.timestamp) });
+      meta.createSpan({ text: `${version.wordCount ?? 0} ${this.plugin.t("wordStats")}` });
+      item.addEventListener("click", async () => {
+        this.selectedVersion = version;
+        await this.render();
+      });
+    });
+  }
+
+  private async renderDetails(parent: HTMLElement): Promise<void> {
+    const details = parent.createDiv("gsvc-details");
+    const heading = details.createDiv("gsvc-panel-heading");
+    heading.createEl("span", { text: this.plugin.t("details") });
+    if (!this.selectedVersion) {
+      details.createDiv("gsvc-empty-details").setText(this.plugin.t("selectSnapshot"));
+      return;
+    }
+
+    const currentContent = await this.app.vault.read(this.file);
+    const stats = this.plugin.controller.getWordStats(this.selectedVersion.content);
+    const meta = details.createDiv("gsvc-meta-grid");
+    this.renderMeta(meta, this.plugin.t("fileName"), this.selectedVersion.fileName);
+    if (this.selectedVersion.previousFileName) {
+      this.renderMeta(meta, this.plugin.t("previousName"), this.selectedVersion.previousFileName);
+    }
+    this.renderMeta(meta, this.plugin.t("wordStats"), String(stats.words));
+    this.renderMeta(meta, this.plugin.t("lineStats"), String(stats.lines));
+
+    const diff = this.plugin.controller.getVersionDiff(this.selectedVersion.content, currentContent);
+    const statsRow = details.createDiv("gsvc-stats");
+    statsRow.createSpan({ cls: "gsvc-added", text: `+${diff.filter((line) => line.type === "added").length}` });
+    statsRow.createSpan({ cls: "gsvc-removed", text: `-${diff.filter((line) => line.type === "removed").length}` });
+
+    const diffBlock = details.createDiv("gsvc-section");
+    const title = diffBlock.createDiv("gsvc-section-title");
+    title.createEl("span", { text: this.plugin.t("diffTitle") });
+    const diffEl = diffBlock.createDiv("gsvc-diff is-inline");
+    diff.slice(0, 50).forEach((line) => {
+      const row = diffEl.createDiv(`gsvc-diff-line is-${line.type}`);
+      row.createEl("span", { cls: "gsvc-line-no", text: `${line.oldLine ?? ""} ${line.newLine ?? ""}`.trim() });
+      row.createEl("span", { cls: "gsvc-line-marker", text: line.type === "added" ? "+" : line.type === "removed" ? "-" : " " });
+      row.createEl("code", { text: line.content || " " });
+    });
+  }
+
+  private renderMeta(parent: HTMLElement, label: string, value: string): void {
+    const item = parent.createDiv("gsvc-meta-item");
+    item.createEl("span", { text: label });
+    item.createEl("strong", { text: value });
+  }
+
+  private formatDate(timestamp: number): string {
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(timestamp));
+  }
+}
+
 export default class VersionControlPlugin extends Plugin {
   settings: VersionControlSettings = DEFAULT_SETTINGS;
   controller!: VersionController;
@@ -774,7 +1182,7 @@ export default class VersionControlPlugin extends Plugin {
     this.controller = new VersionController(this.app, this.settings);
 
     this.registerView(VIEW_TYPE_VERSION_CONTROL, (leaf) => new VersionControlView(leaf, this));
-    this.addRibbonIcon("git-branch", this.t("ribbon"), () => this.activateView());
+    this.addRibbonIcon("git-branch", this.t("ribbon"), () => this.openFloatingHistory());
 
     this.addCommand({
       id: "open-version-control",
@@ -832,6 +1240,19 @@ export default class VersionControlPlugin extends Plugin {
       })
     );
 
+    this.registerEvent(
+      this.app.vault.on("rename", async (file, oldPath) => {
+        try {
+          const version = await this.controller.handleRename(file, oldPath);
+          if (version) {
+            await this.getView()?.refresh();
+          }
+        } catch (error) {
+          console.error("Rename snapshot failed", error);
+        }
+      })
+    );
+
     this.addSettingTab(new VersionControlSettingTab(this.app, this));
   }
 
@@ -872,6 +1293,15 @@ export default class VersionControlPlugin extends Plugin {
     await leaf.setViewState({ type: VIEW_TYPE_VERSION_CONTROL, active: true });
     this.app.workspace.revealLeaf(leaf);
     await this.getView()?.setFile(this.getActiveMarkdownFile());
+  }
+
+  async openFloatingHistory(): Promise<void> {
+    const file = this.getActiveMarkdownFile();
+    if (!file) {
+      new Notice(this.t("noMarkdownBody"));
+      return;
+    }
+    new VersionControlModal(this.app, this, file).open();
   }
 
   private async createSnapshotForFile(file: TFile): Promise<void> {
@@ -966,14 +1396,16 @@ class VersionControlSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(this.plugin.t("author"))
-      .setDesc(this.plugin.t("authorDesc"))
-      .addText((text) =>
-        text
-          .setPlaceholder("User")
-          .setValue(this.plugin.settings.author)
+      .setName(this.plugin.t("diffMode"))
+      .setDesc(this.plugin.t("modalHint"))
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("split", this.plugin.t("diffModeSplit"))
+          .addOption("inline", this.plugin.t("diffModeInline"))
+          .addOption("stacked", this.plugin.t("diffModeStacked"))
+          .setValue(this.plugin.settings.diffViewMode)
           .onChange(async (value) => {
-            this.plugin.settings.author = value;
+            this.plugin.settings.diffViewMode = value as DiffViewMode;
             await this.plugin.saveSettings();
           })
       );

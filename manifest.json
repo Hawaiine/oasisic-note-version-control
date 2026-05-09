@@ -1,7 +1,7 @@
 {
   "id": "oasisic-note-version-control",
   "name": "Oasisic Note Version Control",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "0.15.0",
   "description": "Git-style snapshots, history, diffs, and restore workflows for Markdown notes.",
   "author": "Hawaiine",
