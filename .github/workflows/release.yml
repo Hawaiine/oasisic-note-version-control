@@ -1,0 +1,55 @@
+name: Release Obsidian Plugin
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, must match manifest.json version"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Check manifest version
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          node -e "const fs = require('fs'); const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8')); if (manifest.version !== process.env.RELEASE_TAG) { throw new Error(`manifest.json version ${manifest.version} does not match release tag ${process.env.RELEASE_TAG}`); }"
+
+      - name: Check release files
+        run: |
+          test -f manifest.json
+          test -f main.js
+          test -f styles.css
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          files: |
+            manifest.json
+            main.js
+            styles.css
