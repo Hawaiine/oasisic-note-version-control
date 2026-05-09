@@ -192,6 +192,18 @@
   background: #f0b429;
 }
 
+.gsvc-dot.is-auto {
+  background: #2da44e;
+}
+
+.gsvc-dot.is-manual {
+  background: #0969da;
+}
+
+.gsvc-dot.is-restore {
+  background: #8250df;
+}
+
 .gsvc-version-body {
   min-width: 0;
 }
@@ -199,16 +211,75 @@
 .gsvc-version-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
 }
 
 .gsvc-version-top strong {
+  flex: 1;
   overflow: hidden;
   font-size: 12px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.gsvc-change-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.gsvc-change-badge.is-auto {
+  color: #1f6f36;
+  background: #dafbe1;
+  border-color: #aceebb;
+}
+
+.gsvc-change-badge.is-manual {
+  color: #0969da;
+  background: #ddf4ff;
+  border-color: #b6e3ff;
+}
+
+.gsvc-change-badge.is-rename {
+  color: #7d4e00;
+  background: #fff8c5;
+  border-color: #f0d98c;
+}
+
+.gsvc-change-badge.is-restore {
+  color: #8250df;
+  background: #fbefff;
+  border-color: #eac5ff;
+}
+
+.theme-dark .gsvc-change-badge.is-auto {
+  color: #7ee787;
+  background: #12361f;
+  border-color: #2f6d3c;
+}
+
+.theme-dark .gsvc-change-badge.is-manual {
+  color: #79c0ff;
+  background: #102a43;
+  border-color: #1f6feb;
+}
+
+.theme-dark .gsvc-change-badge.is-rename {
+  color: #e3b341;
+  background: #3b2f09;
+  border-color: #8a6d1d;
+}
+
+.theme-dark .gsvc-change-badge.is-restore {
+  color: #d2a8ff;
+  background: #2d1b4e;
+  border-color: #6e40c9;
 }
 
 .gsvc-version-top code,
@@ -224,8 +295,19 @@
 
 .gsvc-version-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 3px;
+}
+
+.gsvc-mini-add {
+  color: #1f6f36;
+  font-weight: 700;
+}
+
+.gsvc-mini-del {
+  color: #cf222e;
+  font-weight: 700;
 }
 
 .gsvc-version-actions {
@@ -331,7 +413,9 @@
 .gsvc-diff-modes button {
   height: 24px;
   padding: 0 8px;
+  border: 1px solid var(--background-modifier-border);
   border-radius: 3px;
+  background: var(--background-primary);
   font-size: 11px;
 }
 
@@ -340,12 +424,56 @@
   background: var(--interactive-accent);
 }
 
+.gsvc-diff-file-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  background: var(--background-secondary);
+  font-size: 12px;
+}
+
+.gsvc-file-icon {
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: #0969da;
+  background: #ddf4ff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.gsvc-diff-file-header small {
+  color: var(--text-muted);
+}
+
 .gsvc-diff,
 .gsvc-preview {
   border: 1px solid var(--background-modifier-border);
   border-radius: 4px;
   overflow: hidden;
   background: var(--background-secondary);
+}
+
+.gsvc-diff {
+  border-radius: 0 0 4px 4px;
+}
+
+.gsvc-diff.is-split .gsvc-diff-line {
+  border-right: 1px solid var(--background-modifier-border);
+}
+
+.gsvc-diff.is-inline .gsvc-diff-line {
+  grid-template-columns: 70px 24px minmax(0, 1fr);
+}
+
+.gsvc-diff.is-stacked {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
 }
 
 .gsvc-diff-line {

@@ -49,6 +49,10 @@ const TRANSLATIONS = {
     autoSnapshot: "Auto snapshot: {{name}}",
     renameSnapshot: "Rename: {{oldName}} -> {{newName}}",
     contentSummary: "Edit: {{additions}} additions, {{deletions}} deletions",
+    contentSummaryHeading: "Updated heading: {{heading}}",
+    contentSummaryTable: "Updated table content",
+    contentSummaryList: "Updated list items",
+    contentSummaryLarge: "Large edit: {{additions}} additions, {{deletions}} deletions",
     loadHistoryFailed: "Could not load version history for {{name}}.",
     versionNotFound: "Version not found.",
     beforeRevert: "Before reverting to {{id}}",
@@ -84,6 +88,9 @@ const TRANSLATIONS = {
     changedName: "Renamed note",
     changedContent: "Edited content",
     changedRestore: "Restored version",
+    changedManual: "Manual snapshot",
+    diffFileHeader: "Markdown file",
+    linesChanged: "{{additions}} additions and {{deletions}} deletions",
     diffMode: "Diff layout",
     diffModeSplit: "Side by side",
     diffModeInline: "Inline",
@@ -125,6 +132,10 @@ const TRANSLATIONS = {
     autoSnapshot: "自动快照：{{name}}",
     renameSnapshot: "重命名：{{oldName}} -> {{newName}}",
     contentSummary: "修改内容：新增 {{additions}} 行，删除 {{deletions}} 行",
+    contentSummaryHeading: "更新标题：{{heading}}",
+    contentSummaryTable: "更新表格内容",
+    contentSummaryList: "调整列表内容",
+    contentSummaryLarge: "大幅修改：新增 {{additions}} 行，删除 {{deletions}} 行",
     loadHistoryFailed: "无法加载 {{name}} 的版本历史。",
     versionNotFound: "未找到该版本。",
     beforeRevert: "恢复到 {{id}} 前的快照",
@@ -160,6 +171,9 @@ const TRANSLATIONS = {
     changedName: "重命名笔记",
     changedContent: "修改内容",
     changedRestore: "恢复版本",
+    changedManual: "手动快照",
+    diffFileHeader: "Markdown 文件",
+    linesChanged: "新增 {{additions}} 行，删除 {{deletions}} 行",
     diffMode: "差异布局",
     diffModeSplit: "左右对比",
     diffModeInline: "上下行内",
@@ -452,6 +466,15 @@ export class VersionController {
     this.cache.delete(path);
   }
 
+  async handleDelete(file: TAbstractFile): Promise<void> {
+    const index = await this.loadIndex();
+    if (index.files[file.path]) {
+      delete index.files[file.path];
+      await this.saveIndex(index);
+    }
+    this.cache.delete(file.path);
+  }
+
   async handleRename(file: TAbstractFile, oldPath: string): Promise<Version | null> {
     if (!(file instanceof TFile) || file.extension !== "md") {
       return null;
@@ -644,14 +667,38 @@ export class VersionController {
     const beforeTitle = this.getFirstHeading(before);
     const afterTitle = this.getFirstHeading(after);
     if (beforeTitle !== afterTitle && afterTitle) {
-      return `${translate(this.settings, "contentSummary", diffStats)} · ${afterTitle}`;
+      return translate(this.settings, "contentSummaryHeading", { heading: afterTitle });
     }
+
+    if (this.hasTableChange(before, after)) {
+      return `${translate(this.settings, "contentSummaryTable")} · ${file.basename}`;
+    }
+
+    if (this.hasListChange(before, after)) {
+      return `${translate(this.settings, "contentSummaryList")} · ${file.basename}`;
+    }
+
+    const total = diffStats.additions + diffStats.deletions;
+    if (total >= 12) {
+      return `${translate(this.settings, "contentSummaryLarge", diffStats)} · ${file.basename}`;
+    }
+
     return `${translate(this.settings, "contentSummary", diffStats)} · ${file.basename}`;
   }
 
   private getFirstHeading(content: string): string {
     const heading = content.split(/\r?\n/).find((line) => /^#{1,3}\s+\S/.test(line));
     return heading?.replace(/^#{1,3}\s+/, "").trim().slice(0, 32) ?? "";
+  }
+
+  private hasTableChange(before: string, after: string): boolean {
+    const tableLines = (content: string) => content.split(/\r?\n/).filter((line) => /^\s*\|.*\|\s*$/.test(line)).join("\n");
+    return tableLines(before) !== tableLines(after) && tableLines(after).length > 0;
+  }
+
+  private hasListChange(before: string, after: string): boolean {
+    const listLines = (content: string) => content.split(/\r?\n/).filter((line) => /^\s*([-*+]|\d+\.)\s+/.test(line)).join("\n");
+    return listLines(before) !== listLines(after) && listLines(after).length > 0;
   }
 
   private buildLcsTable(oldLines: string[], newLines: string[]): number[][] {
@@ -849,12 +896,17 @@ export class VersionControlView extends ItemView {
 
       const body = item.createDiv("gsvc-version-body");
       const top = body.createDiv("gsvc-version-top");
+      top.createEl("span", {
+        cls: `gsvc-change-badge is-${version.changeType}`,
+        text: this.getChangeLabel(version)
+      });
       top.createEl("strong", { text: version.message });
       top.createEl("code", { text: version.id });
 
       const meta = body.createDiv("gsvc-version-meta");
       meta.createSpan({ text: this.formatDate(version.timestamp) });
-      meta.createSpan({ text: `${version.additions ?? 0}+ / ${version.deletions ?? 0}-` });
+      meta.createSpan({ cls: "gsvc-mini-add", text: `+${version.additions ?? 0}` });
+      meta.createSpan({ cls: "gsvc-mini-del", text: `-${version.deletions ?? 0}` });
       meta.createSpan({ text: version.fileName });
 
       const actions = body.createDiv("gsvc-version-actions");
@@ -921,8 +973,23 @@ export class VersionControlView extends ItemView {
     stats.createSpan({ cls: "gsvc-removed", text: `-${removals}` });
   }
 
+  private getChangeLabel(version: Version): string {
+    if (version.changeType === "rename") {
+      return this.plugin.t("changedName");
+    }
+    if (version.changeType === "restore") {
+      return this.plugin.t("changedRestore");
+    }
+    if (version.changeType === "manual") {
+      return this.plugin.t("changedManual");
+    }
+    return this.plugin.t("changedContent");
+  }
+
   private renderDiff(parent: HTMLElement, diff: DiffLine[]): void {
     const block = parent.createDiv("gsvc-section");
+    const additions = diff.filter((line) => line.type === "added").length;
+    const deletions = diff.filter((line) => line.type === "removed").length;
     const title = block.createDiv("gsvc-section-title");
     title.createEl("span", { text: this.plugin.t("diffTitle") });
     const modeSwitch = title.createDiv("gsvc-diff-modes");
@@ -940,6 +1007,11 @@ export class VersionControlView extends ItemView {
     if (diff.length > 50) {
       title.createEl("small", { text: this.plugin.t("showingLines", { shown: 50, total: diff.length }) });
     }
+
+    const fileHeader = block.createDiv("gsvc-diff-file-header");
+    fileHeader.createEl("span", { cls: "gsvc-file-icon", text: "MD" });
+    fileHeader.createEl("strong", { text: this.selectedVersion?.fileName ?? this.plugin.t("diffFileHeader") });
+    fileHeader.createEl("small", { text: this.plugin.t("linesChanged", { additions, deletions }) });
 
     const diffEl = block.createDiv(`gsvc-diff is-${this.plugin.settings.diffViewMode}`);
     const visibleLines = diff.slice(0, 50);
@@ -1106,9 +1178,13 @@ class VersionControlModal extends Modal {
       const item = list.createDiv({
         cls: `gsvc-version-item ${this.selectedVersion?.id === version.id ? "is-selected" : ""}`
       });
-      item.createDiv("gsvc-rail").createDiv(`gsvc-dot ${version.changeType === "rename" ? "is-rename" : ""}`);
+      item.createDiv("gsvc-rail").createDiv(`gsvc-dot is-${version.changeType}`);
       const body = item.createDiv("gsvc-version-body");
       const top = body.createDiv("gsvc-version-top");
+      top.createEl("span", {
+        cls: `gsvc-change-badge is-${version.changeType}`,
+        text: this.getChangeLabel(version)
+      });
       top.createEl("strong", { text: version.message });
       top.createEl("code", { text: version.id });
       const meta = body.createDiv("gsvc-version-meta");
@@ -1145,22 +1221,91 @@ class VersionControlModal extends Modal {
     statsRow.createSpan({ cls: "gsvc-added", text: `+${diff.filter((line) => line.type === "added").length}` });
     statsRow.createSpan({ cls: "gsvc-removed", text: `-${diff.filter((line) => line.type === "removed").length}` });
 
-    const diffBlock = details.createDiv("gsvc-section");
-    const title = diffBlock.createDiv("gsvc-section-title");
-    title.createEl("span", { text: this.plugin.t("diffTitle") });
-    const diffEl = diffBlock.createDiv("gsvc-diff is-inline");
-    diff.slice(0, 50).forEach((line) => {
-      const row = diffEl.createDiv(`gsvc-diff-line is-${line.type}`);
-      row.createEl("span", { cls: "gsvc-line-no", text: `${line.oldLine ?? ""} ${line.newLine ?? ""}`.trim() });
-      row.createEl("span", { cls: "gsvc-line-marker", text: line.type === "added" ? "+" : line.type === "removed" ? "-" : " " });
-      row.createEl("code", { text: line.content || " " });
+      const diffBlock = details.createDiv("gsvc-section");
+      const title = diffBlock.createDiv("gsvc-section-title");
+      title.createEl("span", { text: this.plugin.t("diffTitle") });
+    const modeSwitch = title.createDiv("gsvc-diff-modes");
+    (["split", "inline", "stacked"] as DiffViewMode[]).forEach((mode) => {
+      const button = modeSwitch.createEl("button", {
+        text: this.plugin.t(mode === "split" ? "diffModeSplit" : mode === "inline" ? "diffModeInline" : "diffModeStacked"),
+        cls: this.plugin.settings.diffViewMode === mode ? "is-active" : ""
+      });
+      button.addEventListener("click", async () => {
+        this.plugin.settings.diffViewMode = mode;
+        await this.plugin.saveSettings();
+        await this.render();
+      });
     });
+    const fileHeader = diffBlock.createDiv("gsvc-diff-file-header");
+    fileHeader.createEl("span", { cls: "gsvc-file-icon", text: "MD" });
+    fileHeader.createEl("strong", { text: this.selectedVersion.fileName });
+    fileHeader.createEl("small", {
+      text: this.plugin.t("linesChanged", {
+        additions: diff.filter((line) => line.type === "added").length,
+        deletions: diff.filter((line) => line.type === "removed").length
+      })
+    });
+    this.renderDiffByMode(diffBlock, diff.slice(0, 50));
+  }
+
+  private renderDiffByMode(parent: HTMLElement, lines: DiffLine[]): void {
+    const diffEl = parent.createDiv(`gsvc-diff is-${this.plugin.settings.diffViewMode}`);
+    if (this.plugin.settings.diffViewMode === "split") {
+      const grid = diffEl.createDiv("gsvc-split-diff");
+      grid.createEl("strong", { text: this.plugin.t("before") });
+      grid.createEl("strong", { text: this.plugin.t("after") });
+      lines.forEach((line) => {
+        const before = grid.createDiv(`gsvc-diff-line is-${line.type === "added" ? "empty" : line.type}`);
+        const after = grid.createDiv(`gsvc-diff-line is-${line.type === "removed" ? "empty" : line.type}`);
+        if (line.type !== "added") {
+          this.renderDiffRowContent(before, line, "-");
+        }
+        if (line.type !== "removed") {
+          this.renderDiffRowContent(after, line, "+");
+        }
+      });
+      return;
+    }
+    if (this.plugin.settings.diffViewMode === "stacked") {
+      const before = diffEl.createDiv("gsvc-stacked-block");
+      before.createEl("strong", { text: this.plugin.t("before") });
+      lines.filter((line) => line.type !== "added").forEach((line) => this.renderDiffRow(before, line));
+      const after = diffEl.createDiv("gsvc-stacked-block");
+      after.createEl("strong", { text: this.plugin.t("after") });
+      lines.filter((line) => line.type !== "removed").forEach((line) => this.renderDiffRow(after, line));
+      return;
+    }
+    lines.forEach((line) => this.renderDiffRow(diffEl, line));
+  }
+
+  private renderDiffRow(parent: HTMLElement, line: DiffLine): void {
+    const row = parent.createDiv(`gsvc-diff-line is-${line.type}`);
+    this.renderDiffRowContent(row, line, line.type === "added" ? "+" : line.type === "removed" ? "-" : " ");
+  }
+
+  private renderDiffRowContent(row: HTMLElement, line: DiffLine, marker: string): void {
+    row.createEl("span", { cls: "gsvc-line-no", text: `${line.oldLine ?? ""} ${line.newLine ?? ""}`.trim() });
+    row.createEl("span", { cls: "gsvc-line-marker", text: line.type === "context" ? " " : marker });
+    row.createEl("code", { text: line.content || " " });
   }
 
   private renderMeta(parent: HTMLElement, label: string, value: string): void {
     const item = parent.createDiv("gsvc-meta-item");
     item.createEl("span", { text: label });
     item.createEl("strong", { text: value });
+  }
+
+  private getChangeLabel(version: Version): string {
+    if (version.changeType === "rename") {
+      return this.plugin.t("changedName");
+    }
+    if (version.changeType === "restore") {
+      return this.plugin.t("changedRestore");
+    }
+    if (version.changeType === "manual") {
+      return this.plugin.t("changedManual");
+    }
+    return this.plugin.t("changedContent");
   }
 
   private formatDate(timestamp: number): string {
@@ -1235,8 +1380,8 @@ export default class VersionControlPlugin extends Plugin {
     );
 
     this.registerEvent(
-      this.app.vault.on("delete", (file) => {
-        this.controller.clearCacheFor(file.path);
+      this.app.vault.on("delete", async (file) => {
+        await this.controller.handleDelete(file);
       })
     );
 
